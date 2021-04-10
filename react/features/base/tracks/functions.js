@@ -1,7 +1,9 @@
 /* global APP */
 
+import { isMobileBrowser } from '../environment/utils';
 import JitsiMeetJS, { JitsiTrackErrors, browser } from '../lib-jitsi-meet';
 import { MEDIA_TYPE, VIDEO_TYPE, setAudioMuted } from '../media';
+import { toState } from '../redux';
 import {
     getUserSelectedCameraDeviceId,
     getUserSelectedMicDeviceId
@@ -63,16 +65,25 @@ export async function createLocalPresenterTrack(options, desktopHeight) {
  * @param {string|null} [options.micDeviceId] - Microphone device id or
  * {@code undefined} to use app's settings.
  * @param {number|undefined} [oprions.timeout] - A timeout for JitsiMeetJS.createLocalTracks used to create the tracks.
- * @param {boolean} [firePermissionPromptIsShownEvent] - Whether lib-jitsi-meet
+ * @param {boolean} [options.firePermissionPromptIsShownEvent] - Whether lib-jitsi-meet
  * should check for a {@code getUserMedia} permission prompt and fire a
+ * corresponding event.
+ * @param {boolean} [options.fireSlowPromiseEvent] - Whether lib-jitsi-meet
+ * should check for a slow {@code getUserMedia} request and fire a
  * corresponding event.
  * @param {Object} store - The redux store in the context of which the function
  * is to execute and from which state such as {@code config} is to be retrieved.
  * @returns {Promise<JitsiLocalTrack[]>}
  */
-export function createLocalTracksF(options = {}, firePermissionPromptIsShownEvent, store) {
+export function createLocalTracksF(options = {}, store) {
     let { cameraDeviceId, micDeviceId } = options;
-    const { desktopSharingSourceDevice, desktopSharingSources, timeout } = options;
+    const {
+        desktopSharingSourceDevice,
+        desktopSharingSources,
+        firePermissionPromptIsShownEvent,
+        fireSlowPromiseEvent,
+        timeout
+    } = options;
 
     if (typeof APP !== 'undefined') {
         // TODO The app's settings should go in the redux store and then the
@@ -114,11 +125,12 @@ export function createLocalTracksF(options = {}, firePermissionPromptIsShownEven
                     devices: options.devices.slice(0),
                     effects,
                     firefox_fake_device, // eslint-disable-line camelcase
+                    firePermissionPromptIsShownEvent,
+                    fireSlowPromiseEvent,
                     micDeviceId,
                     resolution,
                     timeout
-                },
-                firePermissionPromptIsShownEvent)
+                })
             .catch(err => {
                 logger.error('Failed to create local tracks', options.devices, err);
 
@@ -161,7 +173,10 @@ export function createPrejoinTracks() {
         // Resolve with no tracks
         tryCreateLocalTracks = Promise.resolve([]);
     } else {
-        tryCreateLocalTracks = createLocalTracksF({ devices: initialDevices }, true)
+        tryCreateLocalTracks = createLocalTracksF({
+            devices: initialDevices,
+            firePermissionPromptIsShownEvent: true
+        })
                 .catch(err => {
                     if (requestedAudio && requestedVideo) {
 
@@ -169,7 +184,10 @@ export function createPrejoinTracks() {
                         errors.audioAndVideoError = err;
 
                         return (
-                            createLocalTracksF({ devices: [ 'audio' ] }, true));
+                            createLocalTracksF({
+                                devices: [ 'audio' ],
+                                firePermissionPromptIsShownEvent: true
+                            }));
                     } else if (requestedAudio && !requestedVideo) {
                         errors.audioOnlyError = err;
 
@@ -190,7 +208,10 @@ export function createPrejoinTracks() {
 
                     // Try video only...
                     return requestedVideo
-                        ? createLocalTracksF({ devices: [ 'video' ] }, true)
+                        ? createLocalTracksF({
+                            devices: [ 'video' ],
+                            firePermissionPromptIsShownEvent: true
+                        })
                         : [];
                 })
                 .catch(err => {
@@ -320,7 +341,7 @@ export function getTrackByMediaTypeAndParticipant(
         mediaType,
         participantId) {
     return tracks.find(
-        t => t.participantId === participantId && t.mediaType === mediaType
+        t => Boolean(t.jitsiTrack) && t.participantId === participantId && t.mediaType === mediaType
     );
 }
 
@@ -455,4 +476,17 @@ export function setTrackMuted(track, muted) {
             logger.error(`set track ${f} failed`, error);
         }
     });
+}
+
+/**
+ * Determines whether toggle camera should be enabled or not.
+ *
+ * @param {Function|Object} stateful - The redux store or {@code getState} function.
+ * @returns {boolean} - Whether toggle camera should be enabled.
+ */
+export function isToggleCameraEnabled(stateful) {
+    const state = toState(stateful);
+    const { videoInput } = state['features/base/devices'].availableDevices;
+
+    return isMobileBrowser() && videoInput.length > 1;
 }
